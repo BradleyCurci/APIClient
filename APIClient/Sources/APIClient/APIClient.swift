@@ -5,28 +5,27 @@
 import Foundation
 
 
-class APIClient: @unchecked Sendable {
+public class APIClient: @unchecked Sendable {
     
-    private init() {}
+    public init() {}
     
     @MainActor static let shared = APIClient()
     
-    func fetch<T: Decodable>(
-        base_url: String,
+    public func fetch<T: Decodable>(
+        baseUrl: String,
         method: String = "GET",
         parameters: [String : Any]? = nil,
         headers: [String : String]? = nil,
         body: Data? = nil,
         timeout: TimeInterval = 60.0,
         token: String? = nil,
-        print_response: Bool = false,
-        print_status_code: Bool = false,
+        printResponse: Bool = false,
         completion: @Sendable @escaping (Result<T, Error>) -> Void
     ) {
         
         
         // Build URL Component
-        guard var url_components = URLComponents(string: base_url) else {
+        guard var urlComponents = URLComponents(string: baseUrl) else {
             completion(.failure(APIError.invalid_url))
             return
         }
@@ -34,12 +33,12 @@ class APIClient: @unchecked Sendable {
         
         // Append query parameters for method of type GET
         if method.uppercased() == "GET", let parameters = parameters {
-            url_components.queryItems = parameters.map { key, value in
+            urlComponents.queryItems = parameters.map { key, value in
                 URLQueryItem(name: key, value: "\(value)")
             }
         }
         
-        guard let url = url_components.url else {
+        guard let url = urlComponents.url else {
             completion(.failure(APIError.invalid_url))
             return
         }
@@ -89,32 +88,29 @@ class APIClient: @unchecked Sendable {
             
             // check status codes
             if let httpResponse = response as? HTTPURLResponse {
+                if printResponse { print("Status:", httpResponse.statusCode) }
                 switch httpResponse.statusCode {
                     case 100...199:
-                        self.print_response(data)
-                        self.update_metrics(success: false)
                         completion(.failure(APIError.informational_response))
                         return
                     case 200...299:
                         break
                     case 300...399:
-                        self.update_metrics(success: false)
                         completion(.failure(APIError.redirection_response))
                         return
                     case 400...499:
-                        self.update_metrics(success: false)
                         completion(.failure(APIError.client_error))
                         return
                     default:
-                        self.update_metrics(success: false)
                         completion(.failure(APIError.server_error))
                         return
                 }
             }
             
             do {
-                let decoded_data = try JSONDecoder().decode(T.self, from: data)
-                completion(.success(decoded_data))
+                let decodedData = try JSONDecoder().decode(T.self, from: data)
+                if printResponse { self.printJSON(data) }
+                completion(.success(decodedData))
             } catch {
                 completion(.failure(error))
             }
@@ -134,56 +130,7 @@ class APIClient: @unchecked Sendable {
         case server_error
     }
     
-    private let metrics_queue = DispatchQueue(label: "APIClient.Metrics", attributes: .concurrent)
-    private var total_requests: Int = 0
-    private var successful_requests: Int = 0
-    private var failed_requests: Int = 0
-    private var request_timestamps: [Date] = []
-    
-    public var total_request_count: Int {
-        metrics_queue.sync { total_requests }
-    }
-    
-    public var successfully_requested_count: Int {
-        metrics_queue.sync { successful_requests }
-    }
-    
-    public var failed_requested_count: Int {
-        metrics_queue.sync { failed_requests }
-    }
-    
-    public var requests_per_minute: Double {
-        metrics_queue.sync {
-            let previous_minute = Date().addingTimeInterval(-60)
-            let recent_requests = request_timestamps.filter { $0 > previous_minute}
-            return Double(recent_requests.count) / 1.0
-        }
-    }
-    
-    public var success_rate: Double {
-        metrics_queue.sync {
-            total_requests == 0 ? 0 : (Double(successful_requests) / Double(total_requests)) * 100
-        }
-    }
-    
-    private func update_metrics(request_started: Bool = false, success: Bool? = nil) {
-        metrics_queue.async(flags: .barrier) {
-            
-            if request_started {
-                self.total_requests += 1
-                self.request_timestamps.append(Date())
-            }
-            if let success = success {
-                if success {
-                    self.successful_requests += 1
-                } else {
-                    self.failed_requests += 1
-                }
-            }
-        }
-    }
-    
-    private func print_response(_ JSON_data: Data) {
+    private func printJSON(_ JSON_data: Data) {
         if let JSON_object = try? JSONSerialization.jsonObject(with: JSON_data, options: []),
         let pretty_data = try? JSONSerialization.data(withJSONObject: JSON_object, options: .prettyPrinted),
         let pretty_string = String(data: pretty_data, encoding: .utf8) {
